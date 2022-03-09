@@ -206,7 +206,7 @@ describe('fetchMore on an observable query', () => {
     }
   `;
   const query2: TypedDocumentNode<
-    TCommentData,
+    TCommentData["entry"],
     Omit<TCommentVars, "repoName">
   > = gql`
     query NewComments($start: Int!, $limit: Int!) {
