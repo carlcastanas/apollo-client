@@ -3,7 +3,7 @@ import gql from 'graphql-tag';
 
 import { itAsync, mockSingleLink, subscribeAndCount } from '../testing';
 import { InMemoryCache, InMemoryCacheConfig, FieldMergeFunction, ApolloCache } from '../cache';
-import { ApolloClient, ApolloLink, NetworkStatus, ObservableQuery } from '../core';
+import { ApolloClient, ApolloLink, NetworkStatus, ObservableQuery, TypedDocumentNode } from '../core';
 import { Observable, offsetLimitPagination, concatPagination } from '../utilities';
 
 describe('updateQuery on a simple query', () => {
@@ -178,7 +178,23 @@ describe('updateQuery with fetchMore deprecation notice', () => {
 });
 
 describe('fetchMore on an observable query', () => {
-  const query = gql`
+  type TCommentData = {
+    entry: {
+      __typename: string;
+      comments: Array<{
+        __typename: string;
+        text: string;
+      }>;
+    }
+  };
+
+  type TCommentVars = {
+    repoName: string;
+    start: number;
+    limit: number;
+  };
+
+  const query: TypedDocumentNode<TCommentData, TCommentVars> = gql`
     query Comment($repoName: String!, $start: Int!, $limit: Int!) {
       entry(repoFullName: $repoName) {
         comments(start: $start, limit: $limit) {
@@ -189,7 +205,10 @@ describe('fetchMore on an observable query', () => {
       }
     }
   `;
-  const query2 = gql`
+  const query2: TypedDocumentNode<
+    TCommentData,
+    Omit<TCommentVars, "repoName">
+  > = gql`
     query NewComments($start: Int!, $limit: Int!) {
       comments(start: $start, limit: $limit) {
         text
@@ -269,7 +288,7 @@ describe('fetchMore on an observable query', () => {
       }),
     });
 
-    return client.watchQuery<any>({
+    return client.watchQuery({
       query,
       variables,
     });
@@ -291,7 +310,7 @@ describe('fetchMore on an observable query', () => {
       cache: new InMemoryCache(cacheConfig),
     });
 
-    return client.watchQuery<any>({
+    return client.watchQuery({
       query,
       variables,
     });
@@ -353,26 +372,35 @@ describe('fetchMore on an observable query', () => {
         result: resultMore,
       });
 
-      let latestResult: any;
-      observable.subscribe({
-        next(result: any) {
-          latestResult = result;
-        },
-      });
+      subscribeAndCount(reject, observable, (count, result) => {
+        if (count === 1) {
+          expect(result.loading).toBe(false);
+          expect(result.data.entry.comments).toHaveLength(10);
 
-      return observable.fetchMore({
-        // Rely on the fact that the original variables had limit: 10
-        variables: { start: 10 },
-      }).then(data => {
-        // This is the server result
-        expect(data.data.entry.comments).toHaveLength(10);
-        expect(data.loading).toBe(false);
-        const comments = latestResult.data.entry.comments;
-        expect(comments).toHaveLength(20);
-        for (let i = 1; i <= 20; i++) {
-          expect(comments[i - 1].text).toEqual(`comment ${i}`);
+          return observable.fetchMore({
+            // Rely on the fact that the original variables had limit: 10
+            variables: { start: 10 },
+          }).then(fetchMoreResult => {
+            // This is the server result
+            expect(fetchMoreResult.loading).toBe(false);
+            expect(fetchMoreResult.data.entry.comments).toHaveLength(10);
+          }).catch(reject);
+
+        } else if (count === 2) {
+          expect(result.loading).toBe(false);
+          const combinedComments = result.data.entry.comments;
+          expect(combinedComments).toHaveLength(20);
+          combinedComments.forEach((comment, i) => {
+            expect(comment.text).toEqual(`comment ${i + 1}`);
+          });
+
+          setTimeout(resolve, 10);
+        } else {
+          reject(`Too many results (${
+            JSON.stringify({ count, result })
+          })`);
         }
-      }).then(resolve, reject);
+      });
     });
   });
 
@@ -431,24 +459,36 @@ describe('fetchMore on an observable query', () => {
         result: resultMore,
       });
 
-      let latestResult: any;
-      observable.subscribe({
-        next(result: any) {
-          latestResult = result;
-        },
-      });
+      // let latestResult: ApolloQueryResult<any>;
+      subscribeAndCount(reject, observable, (count, result) => {
+        // latestResult = result;
+        if (count === 1) {
+          expect(result.loading).toBe(false);
+          expect(result.data.entry.comments).toHaveLength(10);
 
-      return observable.fetchMore({
-        variables: { start: 10 }, // rely on the fact that the original variables had limit: 10
-      }).then(data => {
-        expect(data.data.entry.comments).toHaveLength(10); // this is the server result
-        expect(data.loading).toBe(false);
-        const comments = latestResult.data.entry.comments;
-        expect(comments).toHaveLength(20);
-        for (let i = 1; i <= 20; i++) {
-          expect(comments[i - 1].text).toEqual(`comment ${i}`);
+          return observable.fetchMore({
+            // rely on the fact that the original variables had limit: 10
+            variables: { start: 10 },
+          }).then(fetchMoreResult => {
+            expect(fetchMoreResult.loading).toBe(false);
+            expect(fetchMoreResult.data.entry.comments).toHaveLength(10); // this is the server result
+          }).catch(reject);
+
+        } else if (count === 2) {
+          expect(result.loading).toBe(false);
+          const combinedComments = result.data.entry.comments;
+          expect(combinedComments).toHaveLength(20);
+          combinedComments.forEach((comment, i) => {
+            expect(comment.text).toEqual(`comment ${i + 1}`);
+          });
+
+          setTimeout(resolve, 10);
+        } else {
+          reject(`Too many results (${
+            JSON.stringify({ count, result })
+          })`);
         }
-      }).then(resolve, reject);
+      });
     });
   });
 
