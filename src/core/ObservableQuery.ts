@@ -1,5 +1,4 @@
 import { invariant } from '../utilities/globals';
-import { DocumentNode } from 'graphql';
 import { equal } from '@wry/equality';
 
 import { NetworkStatus, isNetworkRequestInFlight } from './networkStatus';
@@ -401,8 +400,6 @@ Did you mean to call refetch(variables) instead of refetch({ variables })?`);
       this.observe();
     }
 
-    const updatedQuerySet = new Set<DocumentNode>();
-
     return this.queryManager.fetchQuery(
       qid,
       combinedOptions,
@@ -415,6 +412,11 @@ Did you mean to call refetch(variables) instead of refetch({ variables })?`);
         queryInfo.networkStatus = originalNetworkStatus;
       }
 
+      // Performing this cache update inside a cache.batch transaction ensures
+      // any affected cache.watch watchers are notified about the updates. Most
+      // watchers will be using the QueryInfo class, which responds to
+      // notifications by calling reobserveCacheFirst to deliver fetchMore cache
+      // results back to this ObservableQuery.
       this.queryManager.cache.batch({
         update: cache => {
           const { updateQuery } = fetchMoreOptions;
@@ -435,7 +437,6 @@ Did you mean to call refetch(variables) instead of refetch({ variables })?`);
             // combinedOptions.variables (instead of this.variables, which is
             // what this.updateQuery uses, because it works by abusing the
             // original field value, keyed by the original variables).
-
             cache.writeQuery({
               query: combinedOptions.query,
               variables: combinedOptions.variables,
@@ -443,18 +444,9 @@ Did you mean to call refetch(variables) instead of refetch({ variables })?`);
             });
           }
         },
-
-        onWatchUpdated(watch) {
-          updatedQuerySet.add(watch.query);
-        },
       });
 
       return fetchMoreResult as ApolloQueryResult<TFetchData>;
-
-    }).finally(() => {
-      if (!updatedQuerySet.has(this.options.query)) {
-        this.reobserveCacheFirst();
-      }
     });
   }
 
@@ -822,7 +814,7 @@ Did you mean to call refetch(variables) instead of refetch({ variables })?`);
   // this.options.fetchPolicy is "cache-and-network" or "network-only". When
   // this.options.fetchPolicy is any other policy ("cache-first", "cache-only",
   // "standby", or "no-cache"), we call this.reobserve() as usual.
-  private reobserveCacheFirst() {
+  public reobserveCacheFirst() {
     const { fetchPolicy, nextFetchPolicy } = this.options;
 
     if (
